@@ -12,7 +12,6 @@ interface AnalysisResult {
   isViolation: boolean;
   violationDetails: ViolationByCategory[];
   summary: string;
-  recommendations: string[];
 }
 
 const LegalTextAnalyzer = () => {
@@ -93,18 +92,6 @@ const LegalTextAnalyzer = () => {
         summary: hasViolation ? 
           `Teks mengandung pelanggaran hukum dalam ${foundViolations.length} pasal: ${foundViolations.map(v => v.laws[0]).join(', ')}. Konten berpotensi melanggar ketentuan KUHP dan UU ITE.` :
           "Teks yang dianalisis tidak menunjukkan indikasi pelanggaran hukum yang signifikan. Konten tergolong aman dan sesuai dengan norma hukum yang berlaku.",
-        recommendations: hasViolation ? [
-          "Hapus atau revisi bagian teks yang mengandung unsur pelanggaran hukum",
-          "Hindari penggunaan kata-kata yang bersifat menghina atau memfitnah",
-          "Konsultasikan dengan ahli hukum sebelum mempublikasikan konten",
-          "Pastikan konten tidak mengandung unsur pencemaran nama baik",
-          "Lakukan fact-checking sebelum menyebarkan informasi"
-        ] : [
-          "Konten sudah sesuai dengan ketentuan hukum yang berlaku",
-          "Tetap berhati-hati dalam penggunaan bahasa di media sosial",
-          "Lakukan review berkala terhadap konten yang dipublikasikan",
-          "Pastikan informasi yang dibagikan sudah terverifikasi"
-        ]
       };
       
       setResult(result);
@@ -117,11 +104,6 @@ const LegalTextAnalyzer = () => {
         isViolation: false,
         violationDetails: [],
         summary: "Terjadi kesalahan saat menganalisis teks. Silakan coba lagi.",
-        recommendations: [
-          "Periksa koneksi internet Anda",
-          "Coba lagi dalam beberapa saat",
-          "Hubungi administrator jika masalah berlanjut"
-        ]
       });
     } finally {
       setIsAnalyzing(false);
@@ -344,30 +326,6 @@ const LegalTextAnalyzer = () => {
                 <p className={`${darkMode ? 'text-gray-300' : 'text-gray-700'} leading-relaxed`}>
                   {result.summary}
                 </p>
-              </div>
-
-              {/* Recommendations */}
-              <div>
-                <h4 className="text-lg font-semibold mb-3">
-                  💡 Rekomendasi
-                </h4>
-                <div className="space-y-3">
-                  {result.recommendations.map((rec, index) => (
-                    <div 
-                      key={index}
-                      className={`flex items-start space-x-3 p-3 rounded-lg ${
-                        darkMode ? 'bg-blue-900/20' : 'bg-blue-50'
-                      }`}
-                    >
-                      <div className={`w-2 h-2 rounded-full mt-2 ${
-                        darkMode ? 'bg-blue-400' : 'bg-blue-500'
-                      }`}></div>
-                      <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                        {rec}
-                      </span>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           )}

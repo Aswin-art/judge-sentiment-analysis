@@ -26,95 +26,78 @@ const LegalTextAnalyzer = () => {
     setDarkMode(!darkMode);
   };
 
-  // Simulate API call for text analysis
+  // API call for text analysis
   const analyzeText = async () => {
     if (!inputText.trim()) return;
     
     setIsAnalyzing(true);
     setResult(null);
     
-    // Simulate API delay
-    setTimeout(() => {
-      // Define violation categories with their keywords and applicable laws
-      const violationCategories = [
-        {
-          keywords: ['penipu', 'penipuan', 'menipu', 'curang', 'bohong'],
-          laws: [
-            'UU No. 11 Tahun 2008 tentang ITE - Pasal 27 ayat (3)',
-            'KUHP Pasal 310 - Pencemaran nama baik'
-          ],
-          category: 'Pencemaran Nama Baik'
+    try {
+      const response = await fetch('/api/sentiment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
-        {
-          keywords: ['suku', 'ras', 'agama', 'sara', 'pribumi', 'aseng'],
-          laws: [
-            'UU No. 40 Tahun 2008 tentang Penghapusan Diskriminasi Ras dan Etnis',
-            'KUHP Pasal 156a - Penghinaan terhadap golongan'
-          ],
-          category: 'Diskriminasi SARA'
-        },
-        {
-          keywords: ['ancam', 'bunuh', 'habisi', 'serang', 'pukul', 'bakar', 'hancurkan', 'rusak', 'kekerasan', 'perang'],
-          laws: [
-            'KUHP Pasal 335 - Pengancaman',
-            'UU No. 11 Tahun 2008 tentang ITE - Pasal 29'
-          ],
-          category: 'Ancaman Kekerasan'
-        },
-        {
-          keywords: ['vaksin berbahaya', 'chip', 'konspirasi', 'hoax'],
-          laws: [
-            'UU No. 11 Tahun 2008 tentang ITE - Pasal 28 ayat (1)',
-            'KUHP Pasal 14 dan 15 - Penyebaran berita bohong'
-          ],
-          category: 'Penyebaran Hoax'
-        }
-      ];
-      
-      const sentences = inputText.split(/[.!?]+/).filter(s => s.trim().length > 0);
-      const foundViolations: ViolationByCategory[] = [];
-      
-      // Check each category
-      violationCategories.forEach(category => {
-        const violatingTexts: string[] = [];
-        
-        sentences.forEach(sentence => {
-          const lowerSentence = sentence.toLowerCase();
-          const hasKeyword = category.keywords.some(keyword => 
-            lowerSentence.includes(keyword.toLowerCase())
-          );
-          
-          if (hasKeyword) {
-            const trimmedText = sentence.trim();
-            if (!violatingTexts.includes(trimmedText)) {
-              violatingTexts.push(trimmedText);
-            }
-          }
-        });
-        
-        if (violatingTexts.length > 0) {
-          foundViolations.push({
-            category: category.category,
-            laws: category.laws,
-            texts: violatingTexts.slice(0, 3) // Limit to 3 texts per category
-          });
-        }
+        body: JSON.stringify({ text: inputText }),
       });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      console.log('API Response:', data); // Debug log
+      
+      // Check if there are violations from API
+      let foundViolations: ViolationByCategory[] = [];
+      
+      // Backend mengembalikan array langsung atau empty array
+      if (Array.isArray(data) && data.length > 0) {
+        // Group violations by pasal
+        const violationsByPasal: { [key: string]: { sentences: string[], rationales: string[] } } = {};
+        
+        data.forEach((violation: any) => {
+          const pasal = violation.pasal;
+          if (!violationsByPasal[pasal]) {
+            violationsByPasal[pasal] = { sentences: [], rationales: [] };
+          }
+          violationsByPasal[pasal].sentences.push(violation.sentence);
+          violationsByPasal[pasal].rationales.push(violation.rationale);
+        });
+
+        // Convert to our format
+        foundViolations = Object.entries(violationsByPasal).map(([pasal, violationData]) => {
+          // Create combined texts with rationales
+          const textsWithRationales = violationData.sentences.map((sentence, index) => 
+            `${sentence} (${violationData.rationales[index] || 'Melanggar ketentuan pasal'})`
+          );
+
+          return {
+            category: pasal.includes('310') ? 'Pencemaran Nama Baik' : 
+                     pasal.includes('311') ? 'Fitnah' :
+                     pasal.includes('27A') ? 'Pencemaran Nama Baik Elektronik' : 'Pelanggaran Hukum',
+            laws: [pasal],
+            texts: textsWithRationales
+          };
+        });
+      }
       
       const hasViolation = foundViolations.length > 0;
       
       // Create analysis result
-      const mockResult: AnalysisResult = {
+      const result: AnalysisResult = {
         isViolation: hasViolation,
         violationDetails: foundViolations,
         summary: hasViolation ? 
-          `Teks mengandung pelanggaran hukum dalam ${foundViolations.length} kategori: ${foundViolations.map(v => v.category).join(', ')}. Konten berpotensi melanggar ketentuan UU ITE dan KUHP.` :
+          `Teks mengandung pelanggaran hukum dalam ${foundViolations.length} pasal: ${foundViolations.map(v => v.laws[0]).join(', ')}. Konten berpotensi melanggar ketentuan KUHP dan UU ITE.` :
           "Teks yang dianalisis tidak menunjukkan indikasi pelanggaran hukum yang signifikan. Konten tergolong aman dan sesuai dengan norma hukum yang berlaku.",
         recommendations: hasViolation ? [
           "Hapus atau revisi bagian teks yang mengandung unsur pelanggaran hukum",
-          "Hindari penggunaan kata-kata yang bersifat menghina, mengancam, atau mendiskriminasi",
+          "Hindari penggunaan kata-kata yang bersifat menghina atau memfitnah",
           "Konsultasikan dengan ahli hukum sebelum mempublikasikan konten",
-          "Pastikan konten tidak mengandung unsur SARA, hoax, atau provokasi",
+          "Pastikan konten tidak mengandung unsur pencemaran nama baik",
           "Lakukan fact-checking sebelum menyebarkan informasi"
         ] : [
           "Konten sudah sesuai dengan ketentuan hukum yang berlaku",
@@ -124,9 +107,25 @@ const LegalTextAnalyzer = () => {
         ]
       };
       
-      setResult(mockResult);
+      setResult(result);
+      
+    } catch (error) {
+      console.error('Error analyzing text:', error);
+      
+      // Set error result
+      setResult({
+        isViolation: false,
+        violationDetails: [],
+        summary: "Terjadi kesalahan saat menganalisis teks. Silakan coba lagi.",
+        recommendations: [
+          "Periksa koneksi internet Anda",
+          "Coba lagi dalam beberapa saat",
+          "Hubungi administrator jika masalah berlanjut"
+        ]
+      });
+    } finally {
       setIsAnalyzing(false);
-    }, 2000);
+    }
   };
 
   // Handle analysis
@@ -322,12 +321,12 @@ const LegalTextAnalyzer = () => {
                                 <p className={`text-sm italic mb-2 ${
                                   darkMode ? 'text-red-300' : 'text-red-800'
                                 }`}>
-                                  <strong>Kalimat:</strong> "{text}"
+                                  <strong>Kalimat:</strong> "{text.includes('(') ? text.split(' (')[0] : text}"
                                 </p>
                                 <p className={`text-xs ${
                                   darkMode ? 'text-gray-400' : 'text-gray-600'
                                 }`}>
-                                  <strong>Alasan:</strong> Kalimat ini mengandung unsur {categoryViolation.category.toLowerCase()} yang dapat melanggar ketentuan dalam {law.split(' - ')[0]}
+                                  <strong>Alasan:</strong> {text.includes('(') ? text.split(' (')[1]?.replace(')', '') : `Kalimat ini mengandung unsur ${categoryViolation.category.toLowerCase()} yang dapat melanggar ketentuan dalam ${law.split(' - ')[0]}`}
                                 </p>
                               </div>
                             ))}

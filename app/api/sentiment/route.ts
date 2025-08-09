@@ -38,6 +38,26 @@ Output:
 - If no violations, return [].
 - NO EXTRA KEYS, TEXT, OR MARKDOWN.`;
 
+// JSON type helpers
+type JSONPrimitive = string | number | boolean | null;
+interface JSONObject { [key: string]: JSONValue }
+type JSONArray = JSONValue[];
+type JSONValue = JSONPrimitive | JSONObject | JSONArray;
+
+// Simplified JSON extraction: try direct JSON, then ```json fenced block
+function parseModelJson(raw: string): JSONValue | undefined {
+    try {
+        return JSON.parse(raw) as JSONValue;
+    } catch { }
+
+    const fenceRe = /```(?:json)?\s*([\s\S]*?)```/i;
+    const m = fenceRe.exec(raw);
+    if (m?.[1]) {
+        try { return JSON.parse(m[1]) as JSONValue; } catch { }
+    }
+    return undefined;
+}
+
 export async function POST(req: NextRequest) {
     try {
         const json = await req.json();
@@ -47,7 +67,7 @@ export async function POST(req: NextRequest) {
         const apiKey = process.env.GOOGLE_API_KEY;
         if (!apiKey) {
             return NextResponse.json(
-                { error: "Missing GOOGLE_GENERATIVE_AI_API_KEY in environment" },
+                { error: "Missing GOOGLE_API_KEY in environment" },
                 { status: 500 }
             );
         }
@@ -63,29 +83,20 @@ export async function POST(req: NextRequest) {
 
         const res = await model.invoke(input);
 
-        // Attempt to parse JSON from model output; handle string or object
-        let data: any;
-        try {
-            const content = typeof (res as any).content === "string" ? (res as any).content : (res as any)?.lc_kwargs?.content ?? "";
-            data = JSON.parse(content);
-        } catch {
-            // fallback: try to extract JSON block
-            const raw = typeof (res as any).content === "string" ? (res as any).content : JSON.stringify((res as any));
-            const match = raw.match(/\{[\s\S]*\}/);
-            if (match) {
-                data = JSON.parse(match[0]);
-            } else {
-                return NextResponse.json(
-                    { error: "Model returned non-JSON output", raw: (res as any).content },
-                    { status: 502 }
-                );
-            }
+        // Parse JSON output from the model (supports direct and fenced blocks)
+        const raw = typeof (res as any).content === "string" ? (res as any).content : JSON.stringify(res);
+        const data = parseModelJson(raw);
+        if (data === undefined) {
+            return NextResponse.json(
+                { error: "Model returned non-JSON output", raw: (res as any).content },
+                { status: 502 }
+            );
         }
 
         // Validate output shape
         const OutSchema = z.object({
             sentence: z.string(),
-            score: z.enum(["Pasal 310 KUHP", "Pasal 311 KUHP", "Pasal 27A UU ITE (UU No. 1 Tahun 2024)"]),
+            pasal: z.enum(["Pasal 310 KUHP", "Pasal 311 KUHP", "Pasal 27A UU ITE (UU No. 1 Tahun 2024)"]),
             rationale: z.string(),
         });
         const OutputArray = z.array(OutSchema);
@@ -93,11 +104,10 @@ export async function POST(req: NextRequest) {
         const output = OutputArray.safeParse(data);
 
         if (!output.success) {
-            console.log(output);
-            return NextResponse.json({ text: "No violation detected" }, { status: 200 });
+            return NextResponse.json([], { status: 200 });
         }
 
-        return NextResponse.json(output);
+        return NextResponse.json(output.data);
     } catch (err: any) {
         if (err instanceof z.ZodError) {
             return NextResponse.json(

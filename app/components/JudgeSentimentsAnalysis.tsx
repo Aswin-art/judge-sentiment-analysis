@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { Moon, Sun, FileText, Shield, Scale, Quote } from 'lucide-react';
+import { AlertCircle, CheckCircle, Moon, Sun, FileText, Shield, Scale, Quote } from 'lucide-react';
 
 /* ====================== Bunyi Pasal (edit sesuai website kamu) ====================== */
 const PASAL_LIBRARY: Record<
@@ -106,7 +106,7 @@ const extractAyatFromText = (text: string, rationale: string, pasal: string): st
 interface ViolationByCategory {
   category: string;
   laws: string[];   // e.g. ["Pasal 27A UU ITE (UU No. 1 Tahun 2024)"]
-  texts: string[];  // (tak dipakai di UI)
+  texts: string[];  // kalimat; bisa diikuti "(rationale)"
   ayat?: string[];  // ayat yang dilanggar
 }
 
@@ -148,9 +148,7 @@ const SplashScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
         const textIndex = Math.min(Math.floor(next / 25), texts.length - 1);
         setLoadingText(texts[textIndex]);
 
-        if (next === 100) {
-          setTimeout(() => onComplete(), 800);
-        }
+        if (next === 100) setTimeout(() => onComplete(), 800);
         return next <= 100 ? next : prev;
       });
     }, 600);
@@ -221,6 +219,67 @@ const LegalTextAnalyzer: React.FC = () => {
   const clearResults = useCallback(() => { setResult(null); setError(''); }, []);
   const handleSplashComplete = useCallback(() => setShowSplash(false), []);
 
+  // Ambil beberapa kalimat indikatif (masih dipakai untuk ringkas status; bisa dihapus kalau mau)
+  const pickIndicativeTexts = (res: AnalysisResult | null, limit = 3): string[] => {
+    if (!res?.violationDetails?.length) return [];
+    const items: string[] = [];
+    res.violationDetails.forEach(v => {
+      v.texts.forEach(t => {
+        const s = t.includes(' (') ? t.split(' (')[0] : t;
+        items.push(s.trim().replace(/^"|"$/g, ''));
+      });
+    });
+    const seen = new Set<string>();
+    const unique = items.filter(s => { const k = s.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+    return unique.slice(0, limit);
+  };
+
+  /* ---------- Helpers untuk Kesimpulan ---------- */
+  const generalExplanation = (lawKey: string, ayats: string[]): string => {
+    if (lawKey === 'Pasal 311 KUHP') return 'Pasal 311 KUHP mengatur tentang fitnah... Ancaman pidana maksimal empat tahun (dan pencabutan hak pada kondisi tertentu).';
+    if (lawKey === 'Pasal 310 KUHP') return 'Pasal 310 KUHP mengatur pencemaran nama baik... Sanksi 9 bulan (ayat 1) dan 1 tahun 4 bulan (ayat 2); pengecualian ayat (3).';
+    if (lawKey === 'Pasal 27A UU ITE') return 'Pasal 27A UU ITE menekankan bentuk elektronik; ancaman pidana hingga 2 tahun/denda (ayat 4) serta pengaturan fitnah jika tidak terbukti (ayat 6).';
+    return `${lawKey} berlaku sesuai ketentuan terkait.`;
+  };
+
+  const detailBullets = (lawKey: string, ayats: string[]): string[] => {
+    const set = new Set<string>();
+    if (lawKey === 'Pasal 311 KUHP') {
+      if (ayats.length === 0 || ayats.includes('1')) {
+        set.add('Tidak dapat membuktikan tuduhan meski diberi kesempatan.');
+        set.add('Tahu tuduhan tidak benar.');
+        set.add('Ancaman pidana: maks 4 tahun.');
+      }
+      if (ayats.includes('2')) set.add('Pencabutan hak sesuai Pasal 35 angka 1–3 KUHP.');
+    } else if (lawKey === 'Pasal 310 KUHP') {
+      if (ayats.length === 0 || ayats.includes('1')) set.add('Menuduhkan suatu hal agar diketahui umum.');
+      if (ayats.includes('2')) set.add('Bentuk tertulis/gambar yang disiarkan/ditampilkan di muka umum.');
+      if (ayats.includes('3')) set.add('Pengecualian: kepentingan umum/pembelaan diri.');
+    } else if (lawKey === 'Pasal 27A UU ITE') {
+      if (ayats.length === 0 || ayats.includes('1')) set.add('Dilakukan via Sistem Elektronik (Informasi/Dokumen).');
+      if (ayats.includes('4')) set.add('Ancaman: penjara maks 2 tahun dan/atau denda maks Rp400.000.000.');
+      if (ayats.includes('6')) set.add('Jika tidak dapat dibuktikan kebenarannya: dipidana karena fitnah (maks 4 tahun/ denda maks Rp750.000.000).');
+    }
+    return Array.from(set);
+  };
+
+  type QuoteBox = { lawKey: string; ayatNum: string; text: string };
+  type ConclusionBlock = { lawKey: string; general: string; quotes: QuoteBox[]; bullets: string[] };
+
+  const buildConclusionBlocks = (violations: ViolationByCategory[]): ConclusionBlock[] =>
+    violations.map(v => {
+      const raw = v.laws[0];
+      const lawKey = normalizePasalKey(raw) || raw;
+      const ayats = (v.ayat && v.ayat.length > 0) ? v.ayat : ['1'];
+      const general = generalExplanation(lawKey, ayats);
+      const quotes: QuoteBox[] = ayats.map(a => {
+        const bunyi = PASAL_LIBRARY[lawKey]?.ayat?.[a];
+        return { lawKey, ayatNum: a, text: bunyi ? `ayat ${a}: ${bunyi}` : `ayat ${a}: (bunyi belum tersedia)` };
+      });
+      const bullets = detailBullets(lawKey, ayats);
+      return { lawKey, general, quotes, bullets };
+    });
+
   // Panggil API
   const analyzeText = async () => {
     if (!inputText.trim()) return;
@@ -247,10 +306,9 @@ const LegalTextAnalyzer: React.FC = () => {
         });
 
         foundViolations = Object.entries(grouped).map(([pasal, g]) => {
+          const textsWithRationales = g.sentences.map((s, i) => `${s} (${g.rationales[i] || 'Melanggar ketentuan pasal'})`);
           const allAyat: string[] = [];
-          g.sentences.forEach((sentence, i) => {
-            allAyat.push(...extractAyatFromText(sentence, g.rationales[i] || '', pasal));
-          });
+          g.sentences.forEach((sentence, i) => { allAyat.push(...extractAyatFromText(sentence, g.rationales[i] || '', pasal)); });
           const uniqueAyat = [...new Set(allAyat)].sort();
 
           return {
@@ -260,16 +318,27 @@ const LegalTextAnalyzer: React.FC = () => {
               pasal.toLowerCase().includes('27a') ? 'Pencemaran Nama Baik Elektronik' :
               'Pelanggaran Hukum',
             laws: [pasal],
-            texts: [],        // tidak ditampilkan
+            texts: textsWithRationales,
             ayat: uniqueAyat,
           };
         });
       }
 
+      const hasViolation = foundViolations.length > 0;
+      const pasalList = foundViolations.map(v => v.laws[0]);
+      const summaryLines = pasalList.map((p, index) => {
+        const s = lookupPasalShort(p);
+        const ayat = foundViolations[index]?.ayat || [];
+        const ayatText = ayat.length > 0 ? ` ayat ${ayat.join(', ')}` : '';
+        return s ? `${p}${ayatText}: ${s}` : `${p}${ayatText}`;
+      });
+
       setResult({
-        isViolation: foundViolations.length > 0,
+        isViolation: hasViolation,
         violationDetails: foundViolations,
-        summary: '',
+        summary: hasViolation
+          ? `Teks mengandung pelanggaran hukum dalam ${pasalList.length} pasal:\n- ${summaryLines.join('\n- ')}\nKonten berpotensi melanggar ketentuan KUHP dan UU ITE.`
+          : 'Teks yang dianalisis tidak menunjukkan indikasi pelanggaran hukum yang signifikan. Konten tergolong aman dan sesuai dengan norma hukum yang berlaku.',
       });
     } catch (e) {
       console.error(e);
@@ -292,8 +361,8 @@ const LegalTextAnalyzer: React.FC = () => {
   const getLegalIcon = (category: string) =>
     category === 'Pencemaran Nama Baik' ? '🏛️'
       : category === 'Fitnah' ? '⚖️'
-        : category === 'Pencemaran Nama Baik Elektronik' ? '💻'
-          : '📜';
+      : category === 'Pencemaran Nama Baik Elektronik' ? '💻'
+      : '📜';
 
   const getSeverityColor = (category: string, isDark: boolean) => {
     const map = {
@@ -342,14 +411,17 @@ const LegalTextAnalyzer: React.FC = () => {
               Analisis Teks Hukum Indonesia
             </h2>
             <p className={`text-lg ${darkMode ? 'text-slate-300' : 'text-slate-600'} max-w-2xl mx-auto`}>
-              Masukkan teks yang ingin Anda analisis. Hasil akan langsung menampilkan daftar pasal & ayat terkait.
+              Masukkan teks yang ingin Anda analisis untuk melihat apakah ada indikasi pelanggaran pasal hukum.
             </p>
           </div>
 
           {/* Error */}
           {error && (
             <div className={`mb-6 p-4 rounded-lg border-l-4 border-red-500 ${darkMode ? 'bg-red-900/20' : 'bg-red-50'}`}>
-              <p className={`${darkMode ? 'text-red-300' : 'text-red-700'}`}>{error}</p>
+              <div className="flex items-center">
+                <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
+                <p className={`${darkMode ? 'text-red-300' : 'text-red-700'}`}>{error}</p>
+              </div>
             </div>
           )}
 
@@ -388,40 +460,90 @@ const LegalTextAnalyzer: React.FC = () => {
                       : 'bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white'
                   }`}
                 >
-                  {isAnalyzing ? 'Menganalisis...' : 'Analisis Teks'}
+                  {isAnalyzing ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                      <span>Menganalisis...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-2">
+                      <Scale className="w-4 h-4" />
+                      <span>Analisis Teks</span>
+                    </div>
+                  )}
                 </button>
               </div>
             </div>
           </div>
 
-          {/* ==== Hanya Detail Pelanggaran (Pasal & Ayat) ==== */}
+          {/* Results */}
           {result && (
             <div className={`rounded-2xl p-6 shadow-xl backdrop-blur-sm transition-all duration-500 ${darkMode ? 'bg-slate-800/50 border border-slate-700' : 'bg-white/70 border border-slate-200'}`}>
-              <h4 className="text-lg font-semibold mb-4 flex items-center">
-                <FileText className="w-5 h-5 mr-2" /> Detail Pelanggaran Berdasarkan Kategori Hukum
-              </h4>
+              <h3 className="text-2xl font-bold mb-6 flex items-center">
+                {result.isViolation ? (
+                  <AlertCircle className="w-6 h-6 mr-2 text-red-500" />
+                ) : (
+                  <CheckCircle className="w-6 h-6 mr-2 text-green-500" />
+                )}
+                Hasil Analisis
+              </h3>
 
-              {result.violationDetails?.length ? (
-                <div className="space-y-4">
-                  {result.violationDetails.map((cat, i) =>
-                    cat.laws.map((law, j) => {
-                      const lawKey = normalizePasalKey(law) || law;
-                      const ayats = (cat.ayat && cat.ayat.length > 0) ? cat.ayat : ['1'];
-                      return (
-                        <div
-                          key={`${i}-${j}`}
-                          className={`rounded-lg border-l-4 border-blue-500 overflow-hidden ${darkMode ? 'bg-slate-700/30' : 'bg-slate-50'}`}
-                        >
+              {/* Status Card */}
+              <div className={`rounded-xl p-6 mb-6 border-2 ${
+                result.isViolation
+                  ? darkMode ? 'bg-red-900/20 border-red-500/30' : 'bg-red-50 border-red-200'
+                  : darkMode ? 'bg-green-900/20 border-green-500/30' : 'bg-green-50 border-green-200'
+              }`}>
+                <div className="flex-1">
+                  <div className="flex items-center space-x-4">
+                    <div className={`p-3 rounded-full ${
+                      result.isViolation
+                        ? darkMode ? 'bg-red-800/30' : 'bg-red-100'
+                        : darkMode ? 'bg-green-800/30' : 'bg-green-100'
+                    }`}>
+                      {result.isViolation
+                        ? <AlertCircle className={`w-6 h-6 ${darkMode ? 'text-red-400' : 'text-red-600'}`} />
+                        : <CheckCircle className={`w-6 h-6 ${darkMode ? 'text-green-400' : 'text-green-600'}`} />
+                      }
+                    </div>
+                    <div>
+                      <h4 className={`text-xl font-bold ${result.isViolation ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                        {result.isViolation ? 'Terindikasi Pelanggaran' : 'Tidak Terindikasi Pelanggaran'}
+                      </h4>
+                      <p className={`${darkMode ? 'text-slate-300' : 'text-slate-600'}`}>Analisis berdasarkan KUHP dan UU ITE</p>
+                    </div>
+                  </div>
+
+                  {/* Analisis singkat (opsional) */}
+                  {result.isViolation && (
+                    <div className={`mt-4 text-sm ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                      <span className="font-semibold">Kalimat Yang Melanggar:</span>
+                      <ul className="list-disc ml-5 mt-1 space-y-1">
+                        {pickIndicativeTexts(result, 3).map((t, i) => (<li key={i}>"{t}"</li>))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Detail Pelanggaran */}
+              {result.isViolation && result.violationDetails?.length > 0 && (
+                <div className="mb-6">
+                  <h4 className="text-lg font-semibold mb-4 flex items-center">
+                    <AlertCircle className="w-5 h-5 mr-2 text-red-500" /> Detail Pelanggaran Berdasarkan Kategori Hukum
+                  </h4>
+                  <div className="space-y-4">
+                    {result.violationDetails.map((cat, i) =>
+                      cat.laws.map((law, j) => (
+                        <div key={`${i}-${j}`} className={`rounded-lg border-l-4 border-red-500 overflow-hidden ${darkMode ? 'bg-slate-700/30' : 'bg-slate-50'}`}>
                           <div className={`p-4 ${getSeverityColor(cat.category, darkMode)}`}>
                             <div className="flex items-center space-x-3">
                               <span className="text-2xl">{getLegalIcon(cat.category)}</span>
                               <div>
                                 <h5 className="font-bold text-lg">
-                                  {lawKey}
-                                  {ayats.length > 0 && (
-                                    <span className="ml-2 text-sm font-normal opacity-80">
-                                      ayat {ayats.join(', ')}
-                                    </span>
+                                  {law}
+                                  {cat.ayat && cat.ayat.length > 0 && (
+                                    <span className="ml-2 text-sm font-normal opacity-80">ayat {cat.ayat.join(', ')}</span>
                                   )}
                                 </h5>
                                 <p className="text-sm opacity-80">Kategori: {cat.category}</p>
@@ -429,39 +551,64 @@ const LegalTextAnalyzer: React.FC = () => {
                             </div>
                           </div>
 
-                          {/* Bunyi ayat */}
-                          <div className="p-4 space-y-3">
-                            {ayats.map((a) => {
-                              const bunyi = PASAL_LIBRARY[lawKey]?.ayat?.[a];
-                              const text = bunyi ? `ayat ${a}: ${bunyi}` : `ayat ${a}: (bunyi belum tersedia di pustaka)`;
-                              return (
-                                <div
-                                  key={a}
-                                  className={`p-4 rounded-lg border ${darkMode ? 'bg-slate-800/40 border-slate-700' : 'bg-white border-slate-200'} shadow-sm`}
-                                >
-                                  <div className="flex items-start space-x-2">
-                                    <Quote className={`w-4 h-4 mt-1 ${darkMode ? 'text-slate-300' : 'text-slate-500'}`} />
-                                    <div className="text-sm leading-relaxed">
-                                      “{text}”
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
+                          {/* ⛔️ Indikasi pelanggaran (Kalimat# / Alasan) DIHAPUS sesuai permintaan */}
                         </div>
-                      );
-                    })
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Kesimpulan */}
+              <div className="mb-6">
+                <h4 className="text-lg font-semibold mb-3 flex items-center">
+                  <FileText className="w-5 h-5 mr-2" /> Kesimpulan
+                </h4>
+                <div className={`p-4 rounded-lg ${darkMode ? 'bg-slate-700/30' : 'bg-slate-50'}`}>
+                  {result.isViolation ? (
+                    <div className={darkMode ? 'text-slate-300' : 'text-slate-700'}>
+                      {buildConclusionBlocks(result.violationDetails).map((block, idx) => (
+                        <div key={idx} className="mb-6">
+                          <p className="font-medium mb-2">{block.lawKey}</p>
+                          <p className="mb-3">{block.general}</p>
+
+                          {/* Box bunyi ayat dengan label "ayat X:" */}
+                          <div className="space-y-3">
+                            {block.quotes.map((q, i) => (
+                              <div key={i} className={`p-4 rounded-xl border ${darkMode ? 'bg-slate-800/40 border-slate-700' : 'bg-white border-slate-200'} shadow-sm`}>
+                                <div className="flex items-start space-x-2 mb-2">
+                                  <Quote className={`w-4 h-4 mt-1 ${darkMode ? 'text-slate-300' : 'text-slate-500'}`} />
+                                  <div className="text-sm leading-relaxed">“{q.text}”</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {block.bullets.length > 0 && (
+                            <>
+                              <p className="mt-3 font-medium">Poin-poin detail:</p>
+                              <ul className="list-disc ml-5 mt-1 space-y-1">
+                                {block.bullets.map((b, j) => (<li key={j}>{b}</li>))}
+                              </ul>
+                            </>
+                          )}
+                        </div>
+                      ))}
+
+                      <div className={`mt-4 p-4 rounded-lg text-sm ${
+                        darkMode ? 'bg-amber-900/20 text-amber-200 border border-amber-700/40'
+                                 : 'bg-amber-50 text-amber-800 border border-amber-200'
+                      }`}>
+                        ⚠️ Catatan: Hasil ini bersifat indikatif dan memerlukan penilaian lanjutan. Pertimbangkan konteks lengkap, niat, bukti, dan pengecualian hukum (mis. kepentingan umum/pembelaan diri).
+                      </div>
+                    </div>
+                  ) : (
+                    <p className={`${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>{result.summary}</p>
                   )}
                 </div>
-              ) : (
-                <p className={`${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                  Tidak ada pasal/ayat yang terdeteksi dari teks ini.
-                </p>
-              )}
+              </div>
             </div>
           )}
-          {/* ==== /Hanya Detail Pelanggaran ==== */}
 
           {/* Info Hukum */}
           <div className={`mt-12 p-6 rounded-xl ${darkMode ? 'bg-slate-800/30' : 'bg-slate-50'}`}>
@@ -483,7 +630,7 @@ const LegalTextAnalyzer: React.FC = () => {
               </div>
             </div>
             <p className={`text-sm ${darkMode ? 'text-slate-400' : 'text-slate-500'} text-center`}>
-              ⚠️ Hasil ini bersifat indikatif dan tidak menggantikan konsultasi hukum profesional.
+              ⚠️ Hasil analisis ini bersifat indikatif dan tidak menggantikan konsultasi hukum profesional.
             </p>
           </div>
         </div>
